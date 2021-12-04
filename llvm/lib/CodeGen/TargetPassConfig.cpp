@@ -1186,6 +1186,11 @@ void TargetPassConfig::addMachinePasses() {
       addPass(createMachineOutlinerPass(RunOnAllFunctions));
   }
 
+  // whether to add the pass created by swh
+  if (true){
+    addPass(createMachineOutlinerSWHPass(true));
+  }
+
   // Machine function splitter uses the basic block sections feature. Both
   // cannot be enabled at the same time.
   if (TM->Options.EnableMachineFunctionSplitter ||

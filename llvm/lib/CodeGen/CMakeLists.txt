@@ -94,6 +94,7 @@ add_llvm_component_library(LLVMCodeGen
   MachineOperand.cpp
   MachineOptimizationRemarkEmitter.cpp
   MachineOutliner.cpp
+  MachineOutlinerSWH.cpp
   MachinePassManager.cpp
   MachinePipeliner.cpp
   MachinePostDominators.cpp
