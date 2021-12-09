@@ -667,6 +667,27 @@ bool RISCVInstrInfo::getMemOperandWithOffsetWidth(
   return true;
 }
 
+// Return true if get the base operand, byte offset of an instruction and the
+// memory width. Width is the size of memory that is being loaded/stored.
+bool RISCVInstrInfo::swhGetMemOperandWithOffset(
+    const MachineInstr &LdSt, const MachineOperand *&BaseReg, int64_t &Offset,
+    const TargetRegisterInfo *TRI) const {
+  if (!LdSt.mayLoadOrStore())
+    return false;
+
+  // Here we assume the standard RISC-V ISA, which uses a base+offset
+  // addressing mode. You'll need to relax these conditions to support custom
+  // load/stores instructions.
+  if (LdSt.getNumExplicitOperands() != 3)
+    return false;
+  if (!LdSt.getOperand(1).isReg() || !LdSt.getOperand(2).isImm())
+    return false;
+
+  BaseReg = &LdSt.getOperand(1);
+  Offset = LdSt.getOperand(2).getImm();
+  return true;
+}
+
 bool RISCVInstrInfo::areMemAccessesTriviallyDisjoint(
     const MachineInstr &MIa, const MachineInstr &MIb) const {
   assert(MIa.mayLoadOrStore() && "MIa must be a load or store.");
@@ -749,6 +770,100 @@ bool RISCVInstrInfo::isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
 enum MachineOutlinerConstructionID {
   MachineOutlinerDefault
 };
+
+enum MachineAbstractorConstructionID{
+  MachineAbstractorDefault,
+  MachineAbstractorSaveRegister,
+  MachineAbstractorSaveRegisterAndAdjustSP
+};
+
+outliner::AbstractedFunction RISCVInstrInfo::getAbstractingCandidateInfo(
+    outliner::AbstractedFunction &AF) const{
+  std::list<outliner::SwhSeseRegion> &RepeatedRegions = AF.RegionCandidates;
+
+  auto RegisterAvaliablity = [](outliner::SwhSeseRegion &R){
+    const TargetRegisterInfo *TRI = R.getMF()->getSubtarget().getRegisterInfo();
+    R.initLRU(*TRI);
+    LiveRegUnits LRU = R.LRU;
+    unsigned int RegisterAvaliablity = 0b0000000;
+    if (LRU.available(RISCV::X5))
+      RegisterAvaliablity|=0b0000001;
+    if (LRU.available(RISCV::X6))
+      RegisterAvaliablity|=0b0000010;
+    if (LRU.available(RISCV::X7))
+      RegisterAvaliablity|=0b0000100;
+    if (LRU.available(RISCV::X28))
+      RegisterAvaliablity|=0b0001000;
+    if (LRU.available(RISCV::X29))
+      RegisterAvaliablity|=0b0010000;
+    if (LRU.available(RISCV::X30))
+      RegisterAvaliablity|=0b0100000;
+    if (LRU.available(RISCV::X31))
+      RegisterAvaliablity|=0b1000000;
+    return RegisterAvaliablity;
+  };
+
+  unsigned int AvaliableRegister = 0b1111111;
+  //移出所有寄存器都不能用的项
+  for(std::list<outliner::SwhSeseRegion>::iterator it =RepeatedRegions.begin(); it != RepeatedRegions.end(); ) {
+    unsigned int via = RegisterAvaliablity(*it);
+    if (via == 0) {
+      it=RepeatedRegions.erase(it);
+    }
+    else{
+      AvaliableRegister &= via;
+      ++it;
+    }
+  }
+
+  if (AvaliableRegister ==0 || RepeatedRegions.size()<2){
+    AF.AbstractingID =3;
+    return AF;
+  }
+
+  outliner::SwhSeseRegion &FirstRegion = const_cast<outliner::SwhSeseRegion &>(*RepeatedRegions.begin());
+
+
+  //计算SESERegion的大小
+  unsigned RegionSize = 0;
+  for (int i :FirstRegion.BlockList) {
+    auto I = FirstRegion.ParentFunc->getBlockNumbered(i)->begin();
+    auto E = FirstRegion.ParentFunc->getBlockNumbered(i)->end();
+    for (; I != E; ++I)
+      RegionSize += getInstSizeInBytes(*I);
+  }
+
+  unsigned AbstractingID = MachineAbstractorDefault;
+
+  // call t0, function = 8 bytes.
+  unsigned CallOverhead = 8;
+
+  // jr t0 = 4 bytes, 2 bytes if compressed instructions are enabled.
+  unsigned FrameOverhead = 4;
+  if (FirstRegion.getMF()->getSubtarget()
+      .getFeatureBits()[RISCV::FeatureStdExtC])
+    FrameOverhead = 2;
+
+  //检查是否是叶函数
+  if (FirstRegion.isContainsCall()){
+    //如果不是叶函数，需保存寄存器
+    AbstractingID++;
+    FrameOverhead+=16;
+    if (FirstRegion.isContainsStackOperation()){
+      AbstractingID++;
+    }
+  }
+
+  for (std::list<outliner::SwhSeseRegion>::iterator it =RepeatedRegions.begin(); it != RepeatedRegions.end(); ++it){
+    outliner::SwhSeseRegion &R = *it;
+    R.setCallInfo(AbstractingID, CallOverhead);
+    R.AvaliableRegister = AvaliableRegister;
+    R.LRU.clear();
+  }
+  AF.reinitAF(AbstractingID, AvaliableRegister, RegionSize, FrameOverhead);
+  return AF;
+//      outliner::AbstractedFunction(RepeatedRegions, AbstractingID, AvaliableRegister, RegionSize, FrameOverhead);
+}
 
 outliner::OutlinedFunction RISCVInstrInfo::getOutliningCandidateInfo(
     std::vector<outliner::Candidate> &RepeatedSequenceLocs) const {
@@ -840,6 +955,120 @@ RISCVInstrInfo::getOutliningType(MachineBasicBlock::iterator &MBBI,
   return outliner::InstrType::Legal;
 }
 
+
+void RISCVInstrInfo::fixupPostAbstract(const outliner::AbstractedFunction &AF) const {
+//  const TargetRegisterInfo *TRI = AF.MF->getSubtarget().getRegisterInfo();
+  const TargetRegisterInfo *TRI = STI.getRegisterInfo();
+  for (MachineBasicBlock &MBB :*AF.MF) {
+    for (MachineInstr &MI : MBB) {
+      const MachineOperand *Base;
+      int64_t Offset;
+      bool c1 = !MI.mayLoadOrStore();
+      bool c2 = !swhGetMemOperandWithOffset(MI, Base, Offset, TRI);
+      bool c3 = (Base->isReg() && Base->getReg() != RISCV::SP && Base->getReg() != RISCV::X2);
+
+      // Is this a load or store with an immediate offset with SP as the base?
+      if (c1 ||c2||c3)
+        continue;
+
+      // It is, so we have to fix it up.
+      TypeSize Scale(0U, false);
+      int64_t Dummy1, Dummy2;
+
+      MachineOperand &StackOffsetOperand = getMemOpBaseRegImmOfsOffsetOperand(MI);
+      assert(StackOffsetOperand.isImm() && "Stack offset wasn't immediate!");
+
+      // We've pushed the return address to the stack, so add 8 to the offset.
+      // This is safe, since we already checked if it would overflow when we
+      // checked if this instruction was legal to outline.
+      int64_t NewImm = Offset + 8;
+      StackOffsetOperand.setImm(NewImm);
+    }
+  }
+}
+
+void RISCVInstrInfo::buildAbstractedFrame(
+    MachineBasicBlock &MBB, MachineFunction &MF,
+    const outliner::AbstractedFunction &AF) const {
+  const TargetRegisterInfo *TRI = STI.getRegisterInfo();
+
+  Register AvaiableRegister;
+  if ((AF.AvaliableRegister & 0b0000001) > 0){
+    AvaiableRegister = RISCV::X5;
+  } else if ((AF.AvaliableRegister & 0b0000010) > 0){
+    AvaiableRegister = RISCV::X6;
+  } else if ((AF.AvaliableRegister & 0b0000100) > 0){
+    AvaiableRegister = RISCV::X7;
+  } else if ((AF.AvaliableRegister & 0b0001000) > 0){
+    AvaiableRegister = RISCV::X28;
+  } else if ((AF.AvaliableRegister & 0b0010000) > 0){
+    AvaiableRegister = RISCV::X29;
+  } else if ((AF.AvaliableRegister & 0b0100000) > 0){
+    AvaiableRegister = RISCV::X30;
+  } else if ((AF.AvaliableRegister & 0b1000000) > 0){
+    AvaiableRegister = RISCV::X31;
+  }
+
+  // Strip out any CFI instructions
+  for (MachineBasicBlock &MBB0:*AF.MF) {
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      auto I = MBB0.begin();
+      auto E = MBB0.end();
+      for (; I != E; ++I) {
+        if (I->isCFIInstruction()) {
+          I->removeFromParent();
+          Changed = true;
+          break;
+        }
+      }
+    }
+  }
+  if (AF.AbstractingID>1)
+    fixupPostAbstract(AF);
+
+  if (AF.AbstractingID>0){
+    MachineBasicBlock &StartMBB = *AF.getStartMachineBasicBlock();
+    StartMBB.addLiveIn(AvaiableRegister);
+    //use SD in riscv64 and SW in rv32
+    
+    const TargetRegisterClass *RC = TRI->getMinimalPhysRegClass(RISCV::X2);
+    // const TargetRegisterClass *RC = TRI->getRegClass(RISCV::SW);
+    unsigned RegSize = TRI->getRegSizeInBits(*RC);
+    auto saveOpcode =  (RegSize == 32)? RISCV::SW : RISCV::SD;
+
+
+    StartMBB.insert(StartMBB.begin(), BuildMI(MF, DebugLoc(), get(saveOpcode))
+        .addReg(AvaiableRegister, RegState::Define)
+        .addReg(RISCV::X2)
+        .addImm(0));
+    StartMBB.insert(StartMBB.begin(), BuildMI(MF, DebugLoc(), get(RISCV::ADDI))
+        .addReg(RISCV::X2, RegState::Define)
+        .addReg(RISCV::X2)
+        .addImm(-8));
+
+    auto loadOpcode =  (RegSize == 32)? RISCV::LW : RISCV::LD;
+    MBB.insert(MBB.end(), BuildMI(MF, DebugLoc(), get(loadOpcode))
+        .addReg(AvaiableRegister, RegState::Define)
+        .addReg(RISCV::X2)
+        .addImm(0));
+    MBB.insert(MBB.end(), BuildMI(MF, DebugLoc(), get(RISCV::ADDI))
+        .addReg(RISCV::X2, RegState::Define)
+        .addReg(RISCV::X2)
+        .addImm(8));
+  }
+
+  MBB.addLiveIn(AvaiableRegister);
+  // Add in a return instruction to the end of the outlined frame.
+  MBB.insert(MBB.end(), BuildMI(MF, DebugLoc(), get(RISCV::JALR))
+      .addReg(RISCV::X0, RegState::Define)
+      .addReg(AvaiableRegister)
+      .addImm(0));
+
+
+}
+
 void RISCVInstrInfo::buildOutlinedFrame(
     MachineBasicBlock &MBB, MachineFunction &MF,
     const outliner::OutlinedFunction &OF) const {
@@ -879,3 +1108,41 @@ MachineBasicBlock::iterator RISCVInstrInfo::insertOutlinedCall(
                                         RISCVII::MO_CALL));
   return It;
 }
+
+
+MachineBasicBlock::iterator
+RISCVInstrInfo::insertAbstractedCall(Module &M, MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator &It, MachineFunction &MF,
+                     const outliner::SwhSeseRegion &R) const {
+
+  Register AvaiableRegister;
+  if ((R.AvaliableRegister & 0b0000001) > 0){
+    AvaiableRegister = RISCV::X5;
+  } else if ((R.AvaliableRegister & 0b0000010) > 0){
+    AvaiableRegister = RISCV::X6;
+  } else if ((R.AvaliableRegister & 0b0000100) > 0){
+    AvaiableRegister = RISCV::X7;
+  } else if ((R.AvaliableRegister & 0b0001000) > 0){
+    AvaiableRegister = RISCV::X28;
+  } else if ((R.AvaliableRegister & 0b0010000) > 0){
+    AvaiableRegister = RISCV::X29;
+  } else if ((R.AvaliableRegister & 0b0100000) > 0){
+    AvaiableRegister = RISCV::X30;
+  } else if ((R.AvaliableRegister & 0b1000000) > 0){
+    AvaiableRegister = RISCV::X31;
+  }
+  // Add in a call instruction to the outlined function at the given location.
+  It = MBB.insert(It,
+                  BuildMI(MF, DebugLoc(), get(RISCV::PseudoCALLReg), AvaiableRegister)
+                      .addGlobalAddress(M.getNamedValue(MF.getName()), 0,
+                                        RISCVII::MO_CALL));
+  return It;
+}
+MachineOperand &
+RISCVInstrInfo::getMemOpBaseRegImmOfsOffsetOperand(MachineInstr &LdSt) const {
+  assert(LdSt.mayLoadOrStore() && "Expected a memory operation.");
+  MachineOperand &OfsOp = LdSt.getOperand(LdSt.getNumExplicitOperands() - 1);
+  assert(OfsOp.isImm() && "Offset operand wasn't immediate.");
+  return OfsOp;
+}
+

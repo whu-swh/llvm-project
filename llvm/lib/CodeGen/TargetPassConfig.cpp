@@ -1176,6 +1176,12 @@ void TargetPassConfig::addMachinePasses() {
   addPass(&StackMapLivenessID, false);
   addPass(&LiveDebugValuesID, false);
 
+  // whether to add the pass created by swh
+  if (true){
+  // if (false){
+    addPass(createMachineOutlinerSWHPass(true));
+  }
+
   if (TM->Options.EnableMachineOutliner && getOptLevel() != CodeGenOpt::None &&
       EnableMachineOutliner != RunOutliner::NeverOutline) {
     bool RunOnAllFunctions =
@@ -1184,11 +1190,6 @@ void TargetPassConfig::addMachinePasses() {
         RunOnAllFunctions || TM->Options.SupportsDefaultOutlining;
     if (AddOutliner)
       addPass(createMachineOutlinerPass(RunOnAllFunctions));
-  }
-
-  // whether to add the pass created by swh
-  if (true){
-    addPass(createMachineOutlinerSWHPass(true));
   }
 
   // Machine function splitter uses the basic block sections feature. Both

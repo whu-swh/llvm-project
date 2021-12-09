@@ -114,6 +114,9 @@ public:
   virtual bool isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
                                       unsigned &Flags) const override;
 
+  outliner::AbstractedFunction getAbstractingCandidateInfo(
+      outliner::AbstractedFunction &AF) const override;
+
   // Calculate target-specific information for a set of outlining candidates.
   outliner::OutlinedFunction getOutliningCandidateInfo(
       std::vector<outliner::Candidate> &RepeatedSequenceLocs) const override;
@@ -128,13 +131,32 @@ public:
   buildOutlinedFrame(MachineBasicBlock &MBB, MachineFunction &MF,
                      const outliner::OutlinedFunction &OF) const override;
 
+  /// Insert a custom frame for abstracted functions.
+  virtual void buildAbstractedFrame(MachineBasicBlock &MBB, MachineFunction &MF,
+                                    const outliner::AbstractedFunction &AF) const override;
+
+
   // Insert a call to an outlined function into a given basic block.
   virtual MachineBasicBlock::iterator
   insertOutlinedCall(Module &M, MachineBasicBlock &MBB,
                      MachineBasicBlock::iterator &It, MachineFunction &MF,
                      const outliner::Candidate &C) const override;
+
+
+  virtual MachineBasicBlock::iterator
+  insertAbstractedCall(Module &M, MachineBasicBlock &MBB,
+                       MachineBasicBlock::iterator &It, MachineFunction &MF,
+                       const outliner::SwhSeseRegion &R) const override;
+
 protected:
   const RISCVSubtarget &STI;
+  
+    void fixupPostAbstract(const outliner::AbstractedFunction &AF) const;
+  MachineOperand &getMemOpBaseRegImmOfsOffsetOperand(MachineInstr &instr) const;
+  bool swhGetMemOperandWithOffset(const MachineInstr &LdSt,
+                                        const MachineOperand *&BaseReg,
+                                        int64_t &Offset,
+                                        const TargetRegisterInfo *TRI) const;
 };
 
 } // end namespace llvm

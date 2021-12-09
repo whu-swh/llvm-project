@@ -24,7 +24,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
-#include "llvm/CodeGen/MachineOutliner.h"
+#include "llvm/CodeGen/MachineOutlinerSWH.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -1868,6 +1868,12 @@ public:
         .addReg(Src, 0, SrcSubReg);
   }
 
+  virtual outliner::AbstractedFunction getAbstractingCandidateInfo(
+      outliner::AbstractedFunction &AF) const{
+    llvm_unreachable(
+        "Target didn't implement TargetInstrInfo::getAbstractingCandidateInfo!");
+  }
+
   /// Returns a \p outliner::OutlinedFunction struct containing target-specific
   /// information for a set of outlining candidates.
   virtual outliner::OutlinedFunction getOutliningCandidateInfo(
@@ -1897,6 +1903,13 @@ public:
         "Target didn't implement TargetInstrInfo::buildOutlinedFrame!");
   }
 
+  /// Insert a custom frame for abstracted functions.
+  virtual void buildAbstractedFrame(MachineBasicBlock &MBB, MachineFunction &MF,
+                                  const outliner::AbstractedFunction &AF) const {
+    llvm_unreachable(
+        "Target didn't implement TargetInstrInfo::buildAbstractedFrame!");
+  }
+
   /// Insert a call to an outlined function into the program.
   /// Returns an iterator to the spot where we inserted the call. This must be
   /// implemented by the target.
@@ -1906,6 +1919,18 @@ public:
                      const outliner::Candidate &C) const {
     llvm_unreachable(
         "Target didn't implement TargetInstrInfo::insertOutlinedCall!");
+  }
+
+
+  /// Insert a call to an outlined function into the program.
+  /// Returns an iterator to the spot where we inserted the call. This must be
+  /// implemented by the target.
+  virtual MachineBasicBlock::iterator
+  insertAbstractedCall(Module &M, MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator &It, MachineFunction &MF,
+                     const outliner::SwhSeseRegion &R) const {
+    llvm_unreachable(
+        "Target didn't implement TargetInstrInfo::insertAbstractedCall!");
   }
 
   /// Return true if the function can safely be outlined from.
