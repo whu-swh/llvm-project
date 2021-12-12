@@ -70,6 +70,7 @@ RISCVTargetMachine::RISCVTargetMachine(const Target &T, const Triple &TT,
 
   // RISC-V supports the MachineOutliner.
   setMachineOutliner(true);
+  setMachineAbstractor(true);
 }
 
 const RISCVSubtarget *

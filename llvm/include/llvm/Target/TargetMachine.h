@@ -247,6 +247,9 @@ public:
   void setMachineOutliner(bool Enable) {
     Options.EnableMachineOutliner = Enable;
   }
+  void setMachineAbstractor(bool Enable) {
+    Options.EnableMachineAbstractor = Enable;
+  }
   void setSupportsDefaultOutlining(bool Enable) {
     Options.SupportsDefaultOutlining = Enable;
   }

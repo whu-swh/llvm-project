@@ -134,7 +134,7 @@ namespace llvm {
           UniqueSectionNames(true), UniqueBasicBlockSectionNames(false),
           TrapUnreachable(false), NoTrapAfterNoreturn(false), TLSSize(0),
           EmulatedTLS(false), ExplicitEmulatedTLS(false), EnableIPRA(false),
-          EmitStackSizeSection(false), EnableMachineOutliner(false),
+          EmitStackSizeSection(false), EnableMachineOutliner(false),EnableMachineAbstractor(false),
           EnableMachineFunctionSplitter(false), SupportsDefaultOutlining(false),
           EmitAddrsig(false), EmitCallSiteInfo(false),
           SupportsDebugEntryValues(false), EnableDebugEntryValues(false),
@@ -284,6 +284,9 @@ namespace llvm {
 
     /// Enables the MachineOutliner pass.
     unsigned EnableMachineOutliner : 1;
+
+    /// Enables the MachineOutlinerSWH pass.
+    unsigned EnableMachineAbstractor : 1;
 
     /// Enables the MachineFunctionSplitter pass.
     unsigned EnableMachineFunctionSplitter : 1;

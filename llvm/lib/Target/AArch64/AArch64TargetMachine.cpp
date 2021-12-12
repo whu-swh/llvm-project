@@ -326,6 +326,9 @@ AArch64TargetMachine::AArch64TargetMachine(const Target &T, const Triple &TT,
   // AArch64 supports the MachineOutliner.
   setMachineOutliner(true);
 
+  //TODO setMachineAbstractor / MachineOutlinerSWH
+  setMachineAbstractor(true);
+
   // AArch64 supports default outlining behaviour.
   setSupportsDefaultOutlining(true);
 

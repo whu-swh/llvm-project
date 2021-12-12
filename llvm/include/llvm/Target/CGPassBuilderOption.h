@@ -23,6 +23,7 @@ namespace llvm {
 class TargetMachine;
 
 enum class RunOutliner { TargetDefault, AlwaysOutline, NeverOutline };
+enum class RunAbstractor { AlwaysAbstract, NeverAbstract };
 enum class RegAllocType { Default, Basic, Fast, Greedy, PBQP };
 enum class CFLAAType { None, Steensgaard, Andersen, Both };
 

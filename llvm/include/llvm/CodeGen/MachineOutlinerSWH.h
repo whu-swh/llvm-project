@@ -27,25 +27,28 @@
 namespace llvm {
 namespace outliner {
 
+struct AbstractedFunction;
+
 struct SwhSeseRegion : public Candidate{
   MachineFunction *ParentFunc;
   // blockList::[ beginBlockNum, endBlockNum, internalBlockNum1, ...]
   std::vector<int> BlockList;
   int Tag;
   unsigned AvaliableRegister;
+  bool ContainJumpTableInfo = false;
   void sortByBFS(Module &M, MachineFunction &MF);
   void sortByDefault(Module &M, MachineFunction &MF);
   void addSuccessorIntoListByBFS(MachineBasicBlock &Predecessor, MachineBasicBlock &End, std::vector<int> &List);
   void addSuccessorIntoListByDefault(MachineBasicBlock &Predecessor, MachineBasicBlock &End, std::vector<int> &List);
   bool compareWith(SwhSeseRegion ComparedRegion, Module &M, MachineModuleInfo &MMI);
-  int compareMBBs(MachineBasicBlock &Mbb1, MachineBasicBlock &Mbb2, MachineModuleInfo &MMI, SwhSeseRegion ComparedRegion);
+  int compareMBBs(MachineBasicBlock &Mbb1, MachineBasicBlock &Mbb2, MachineModuleInfo &MMI, SwhSeseRegion &ComparedRegion);
   int isSameTerminator(MachineInstr &Ti1, MachineInstr &Ti2, SwhSeseRegion ComparedRegion);
   bool listContains(std::vector<int> Vector, int Number) const;
   MachineFunction *
   toMachineFunction(MachineFunction &Function, const TargetSubtargetInfo &Info,
                     const TargetInstrInfo &Info1,
                     const std::vector<MCCFIInstruction> &Vector,
-                    bool EndWithPointerToSelf, bool EndWithMoreThanOneTerminator);
+                    AbstractedFunction &AF);
   void addRelation(MachineFunction &MF, const TargetSubtargetInfo &TSI,
                    const TargetInstrInfo &TII,
                    const std::vector<MCCFIInstruction> &Instrs, bool EndWithPointerToSelf);
@@ -79,13 +82,21 @@ struct AbstractedFunction:public OutlinedFunction{
   unsigned AbstractedBenefit = 0;
   unsigned AvaliableRegister = 0;
   unsigned int FrameOverhead;
+  int StartMBBNumber = -1;
+  int EndMBBNumber = -1;
 
   MachineBasicBlock *getEndMachineBasicBlock() const{
     //TODO：to fix the end MBB
+    if (EndMBBNumber >= 0) {
+      return MF->getBlockNumbered(EndMBBNumber);
+    }
     return MF->getBlockNumbered(1);
   }
   MachineBasicBlock *getStartMachineBasicBlock() const{
     //TODO：to fix the end MBB
+    if (StartMBBNumber >= 0) { 
+      return MF->getBlockNumbered(StartMBBNumber);
+    }
     return MF->getBlockNumbered(0);
   }
 

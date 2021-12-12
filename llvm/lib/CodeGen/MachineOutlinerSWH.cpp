@@ -11,14 +11,17 @@
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include <cstddef>
 #include <iterator>
 #include <llvm/Support/GraphWriter.h>
 #include "llvm/Support/SuffixTree.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include <functional>
 #include <tuple>
 #include <vector>
@@ -57,14 +60,95 @@ namespace outliner {
 
 
 ///return : -1 not equal; 0 conditional equal; 1 equal.
-int SwhSeseRegion::compareMBBs(MachineBasicBlock &Mbb1, MachineBasicBlock &Mbb2,MachineModuleInfo &MMI, SwhSeseRegion ComparedRegion){
+int SwhSeseRegion::compareMBBs(MachineBasicBlock &Mbb1, MachineBasicBlock &Mbb2,MachineModuleInfo &MMI, SwhSeseRegion &ComparedRegion){
   if (Mbb1.size() != Mbb2.size())
     return -1;
   MachineBasicBlock::iterator It1 = Mbb1.begin();
   MachineBasicBlock::iterator It2 = Mbb2.begin();
+
+  bool HasJumpTable1 = false;
+  if(!ContainJumpTableInfo){
+    if (MachineJumpTableInfo *JTI = ParentFunc->getJumpTableInfo()) {
+      if (!JTI->isEmpty()){
+        HasJumpTable1 = true;
+        std::vector<MachineJumpTableEntry> JumpTables = JTI->getJumpTables();
+        for (size_t I = 0; I < JumpTables.size() ; I++) {
+          if (llvm::is_contained(JumpTables[I].MBBs, &Mbb1)){
+            ContainJumpTableInfo = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+
+  bool HasJumpTable2 = false;
+  if(!ComparedRegion.ContainJumpTableInfo){
+    if (MachineJumpTableInfo *JTI = ComparedRegion.ParentFunc->getJumpTableInfo()) {
+      if (!JTI->isEmpty()){
+        HasJumpTable2 = true;
+        std::vector<MachineJumpTableEntry> JumpTables = JTI->getJumpTables();
+        for (size_t I = 0; I < JumpTables.size() ; I++) {
+          if (llvm::is_contained(JumpTables[I].MBBs, &Mbb2)){
+            ComparedRegion.ContainJumpTableInfo = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+
   for (MachineBasicBlock::iterator Et1 =Mbb1.end(); It1!=Et1; ++It1, ++It2) {
+    //遍历每一个指令
     MachineInstr *Mi1 = &(*It1);
     MachineInstr *Mi2 = &(*It2);
+
+    if (HasJumpTable1){
+      if (!ContainJumpTableInfo && !Mi1->memoperands_empty()) {
+        for (const MachineMemOperand *Op : Mi1->memoperands()) {
+          if (const PseudoSourceValue *PVal = Op->getPseudoValue()) {
+            if (PVal->isJumpTable()) {
+              this->ContainJumpTableInfo = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!ContainJumpTableInfo){
+        for (MachineOperand MO : Mi1->operands()) {
+          if (MO.isJTI()){
+            this->ContainJumpTableInfo = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (HasJumpTable2){
+      if (!ComparedRegion.ContainJumpTableInfo && !Mi2->memoperands_empty()) {
+        for (const MachineMemOperand *Op : Mi2->memoperands()) {
+          if (const PseudoSourceValue *PVal = Op->getPseudoValue()) {
+            if (PVal->isJumpTable()) {
+              ComparedRegion.ContainJumpTableInfo = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!ComparedRegion.ContainJumpTableInfo){
+        for (MachineOperand MO : Mi2->operands()) {
+          if (MO.isJTI()){
+            ComparedRegion.ContainJumpTableInfo = true;
+            break;
+          }
+        }
+      }
+    }
+    
     if (!MachineInstrExpressionTrait::isEqual(Mi1,Mi2)){
       //如果不完全相等
       if(Mi1->isTerminator() && Mi2->isTerminator()){
@@ -219,7 +303,7 @@ bool SwhSeseRegion::listContains(std::vector<int> Vector, int Number) const {
 MachineFunction *SwhSeseRegion::toMachineFunction(
     MachineFunction &Function, const TargetSubtargetInfo &Info,
     const TargetInstrInfo &Info1, const std::vector<MCCFIInstruction> &Vector,
-    bool EndWithPointerToSelf, bool EndWithMoreThanOneTerminator) {
+    AbstractedFunction &AF) {
 
   /**
    * TODO: 考虑到llvm的实现，只需要从小到大即可，下面的思路暂不考虑
@@ -248,12 +332,19 @@ MachineFunction *SwhSeseRegion::toMachineFunction(
   std::sort(BlockListVia.begin(),BlockListVia.end());
   for (unsigned long A = 0; A < BlockListVia.size(); A++){
     int Via0 = BlockListVia[A];
+
+    if (Via0 == StartBlockNum){
+      AF.StartMBBNumber = A;
+    }else if (Via0 == EndblockNum){
+      AF.EndMBBNumber = A;
+    }
+
     MachineBasicBlock &MBB = *Function.CreateMachineBasicBlock();
     // Insert the new function into the module.
     Function.insert(Function.end(), &MBB);
     for (auto I = ParentFunc->getBlockNumbered(Via0)->begin(), E = ParentFunc->getBlockNumbered(Via0)->end(); I != E;
          ++I) {
-      if (!EndWithPointerToSelf && Via0==EndblockNum && I==ParentFunc->getBlockNumbered(Via0)->getFirstTerminator()){
+      if (!AF.EndWithPointerToSelfRegion && Via0==EndblockNum && I==ParentFunc->getBlockNumbered(Via0)->getFirstTerminator()){
         //E==std::next(I)
         // 替换为判断I是不是terminator，如果是，
         //   当endWithPointerToSelf为假时，
@@ -275,7 +366,7 @@ MachineFunction *SwhSeseRegion::toMachineFunction(
       MBB.insert(MBB.end(), NewMI);
     }
   }
-  addRelation(Function, Info, Info1, Vector, EndWithPointerToSelf);
+  addRelation(Function, Info, Info1, Vector, AF.EndWithPointerToSelfRegion);
 
   //当遇到这种特殊情况时,进行修改
   if (BlockListVia[0] != StartBlockNum)
@@ -288,6 +379,7 @@ MachineFunction *SwhSeseRegion::toMachineFunction(
     MachineBasicBlock *StartMbb = Function.getBlockNumbered(Index);
     Info1.insertUnconditionalBranch(MBB, StartMbb, DebugLoc());
     MBB.addSuccessor(StartMbb);
+    AF.StartMBBNumber = MBB.getNumber();
   }
   return &Function;
 }
@@ -1735,7 +1827,12 @@ void SwhCrossBasicBlockOpt::swhDoAbstract() {
   std::map<int,AbstractedFunction> &TagAbstractedFunctionMap = NeededRegionsInfo.RegionsWithTag;
   //TODO: abstracted by benefit count
   for( std::map<int,AbstractedFunction>::iterator It = TagAbstractedFunctionMap.begin(); It != TagAbstractedFunctionMap.end(); ) {
-
+    
+    if ((It->second.RegionCandidates.begin()->ContainJumpTableInfo)) {
+      TagAbstractedFunctionMap.erase(It++);
+      continue;
+    }
+    
     //保留旧的去重标准
     auto OldAbstractedBlocks = AbstractedBlocks;
     //去重
@@ -1768,9 +1865,12 @@ void SwhCrossBasicBlockOpt::swhDoAbstract() {
       continue;
     }
 
-    auto &RWT=*It;
+    std::pair<const int, AbstractedFunction> &RWT = *It;
     //满足所有判断后，打印输出
     RWT.second.emitMark();
+    if (RWT.first == 6){
+      errs()<<"error";
+    }
 
     std::list<SwhSeseRegion> &RegionCandidates = RWT.second.RegionCandidates;
     MachineFunction &MF = *swhCreateAbstractFunction(RWT.first,RWT.second);
@@ -1995,9 +2095,7 @@ MachineFunction *SwhCrossBasicBlockOpt::swhCreateAbstractFunction(unsigned Name,
   MachineFunction *OriginalMF = FirstCand.ParentFunc;
   const std::vector<MCCFIInstruction> &Instrs = OriginalMF->getFrameInstructions();
 
-  FirstCand.toMachineFunction(MF, STI, TII, Instrs,
-                              AF.EndWithPointerToSelfRegion,
-                              AF.EndWithMoreThanOneTerminator);
+  FirstCand.toMachineFunction(MF, STI, TII, Instrs, AF);
 
   //region 对MF的属性进行设置
   // Set normal properties for a late MachineFunction.

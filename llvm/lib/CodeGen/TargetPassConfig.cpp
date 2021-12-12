@@ -138,6 +138,18 @@ static cl::opt<RunOutliner> EnableMachineOutliner(
                           "Disable all outlining"),
                // Sentinel value for unspecified option.
                clEnumValN(RunOutliner::AlwaysOutline, "", "")));
+
+// Enable or disable the MachineOutliner.
+static cl::opt<RunAbstractor> EnableMachineAbstractor(
+    "enable-machine-abstractor", cl::desc("Enable the machine abstractor"),
+    cl::Hidden, cl::ValueOptional, cl::init(RunAbstractor::NeverAbstract),
+    cl::values(clEnumValN(RunAbstractor::AlwaysAbstract, "always",
+                          "Run on all functions guaranteed to be beneficial"),
+               clEnumValN(RunAbstractor::NeverAbstract, "never",
+                          "Disable all outlining"),
+               // Sentinel value for unspecified option.
+               clEnumValN(RunAbstractor::AlwaysAbstract, "", "")));
+
 // Enable or disable FastISel. Both options are needed, because
 // FastISel is enabled by default with -fast, and we wish to be
 // able to enable or disable fast-isel independently from -O0.
@@ -1177,8 +1189,8 @@ void TargetPassConfig::addMachinePasses() {
   addPass(&LiveDebugValuesID, false);
 
   // whether to add the pass created by swh
-  if (true){
-  // if (false){
+  if (TM->Options.EnableMachineAbstractor && getOptLevel() != CodeGenOpt::None &&
+      EnableMachineAbstractor == RunAbstractor::AlwaysAbstract){
     addPass(createMachineOutlinerSWHPass(true));
   }
 
